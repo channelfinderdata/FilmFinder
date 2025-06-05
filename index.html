@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>FilmFinder</title>
     <!-- Favicon - Cute little film strip icon -->
-    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366F1'%3E%3Cpath d='M18 3v2h-2V3H8v2H6V3H4v18h2v-2h2v2h8v-2h2v2h2V3h-2zm-2 16H8V5h8v14z'/%3E%3Cpath d='M10 7h4v2h-4zm0 4h4v2h-4zm0 4h4v2h-4z'/%3E%3C/svg%3E" type="image/svg+xml">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366F1'%3E%3Cpath d='M18 3v2h-2V3H8v2H6V3H4v18h2v-2h2v2h8v-2h2v2h2V3h-2zm-2 16H8V5h8v14z'/%3E%3Cpath d='M10 7h4v2h-4zm0 4h4v2h-4zm0 4h4v2h-4z'/%3C/svg%3E" type="image/svg+xml">
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -81,7 +81,10 @@
     </div>
 
     <script>
-        const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev'; // Your Cloudflare Worker's URL
+        // CRITICAL: Ensure this WORKER_BASE_URL is exactly correct for your deployed Cloudflare Worker.
+        // You can find this URL in your Cloudflare dashboard under your Worker's overview page.
+        // It's typically in the format: https://<worker-name>.<your-subdomain>.workers.dev
+        const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev'; // <<<--- VERIFY THIS URL
         const IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 
         const genreSelect = document.getElementById('genreSelect');
@@ -92,7 +95,7 @@
         const errorMessage = document.getElementById('errorMessage');
         const versionNumberSpan = document.getElementById('versionNumber'); // Reference to the version span
 
-        const CURRENT_VERSION = "v1.0.1"; // Current version of the FilmFinder frontend
+        const CURRENT_VERSION = "v1.0.3"; // Updated version of the FilmFinder frontend
 
         /**
          * Hides any error messages.
@@ -119,7 +122,7 @@
         // Intersection Observer for infinite scrolling
         const observer = new IntersectionObserver((entries) => {
             if (entries[0].isIntersecting && !isLoading) {
-                // If the loadingMoreIndicator is visible and not already loading, fetch more movies
+                console.log('Intersection Observer triggered: Loading more movies (infinite scroll).');
                 loadMoreMovies(false); // Load more, do not clear existing
             }
         }, {
@@ -132,14 +135,24 @@
          * Fetches movie genres from TMDB API via the Cloudflare Worker proxy.
          */
         async function fetchGenres() {
+            console.log('Fetching genres...');
+            if (!WORKER_BASE_URL) {
+                console.error('WORKER_BASE_URL is not set. Cannot fetch genres.');
+                displayError("Worker URL is not configured. Please check console.");
+                return;
+            }
             try {
-                const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?endpoint=genre/movie/list`);
+                const requestUrl = `${WORKER_BASE_URL}/tmdb-proxy?endpoint=genre/movie/list`;
+                console.log('Fetching genres from Worker URL:', requestUrl);
+                const response = await fetch(requestUrl);
+
                 if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(`Worker error: ${errorData.message || response.statusText}`);
+                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from worker.' }));
+                    throw new Error(`Worker error (genres): ${errorData.message || response.statusText}. Status: ${response.status}`);
                 }
                 const data = await response.json();
                 genres = data.data.genres;
+                console.log('Genres fetched successfully:', genres);
 
                 const allOption = document.createElement('option');
                 allOption.value = 'all';
@@ -154,7 +167,7 @@
                 });
             } catch (error) {
                 console.error("Error fetching genres:", error);
-                displayError("Failed to load genres. Please check your API key setup or network connection.");
+                displayError(`Failed to load genres. Error: ${error.message}`);
             }
         }
 
@@ -166,6 +179,13 @@
          * @returns {Promise<Array>} - A promise that resolves with an array of movie data.
          */
         async function fetchMovies(genreId, page, cacheBuster = null) {
+            console.log(`Fetching movies for genreId: ${genreId}, page: ${page}, cacheBuster: ${cacheBuster}`);
+            if (!WORKER_BASE_URL) {
+                console.error('WORKER_BASE_URL is not set. Cannot fetch movies.');
+                displayError("Worker URL is not configured. Please check console.");
+                return []; // Return empty array to prevent further errors
+            }
+
             const queryParams = new URLSearchParams();
             queryParams.append('endpoint', 'discover/movie');
             queryParams.append('language', 'en-US');
@@ -179,15 +199,25 @@
             }
             if (cacheBuster) {
                 queryParams.append('cache_buster', cacheBuster); // Add cache buster if provided
+                console.log('Adding cache buster to URL:', cacheBuster);
             }
 
-            const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?${queryParams.toString()}`);
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(`Worker error: ${errorData.message || response.statusText}`);
+            const requestUrl = `${WORKER_BASE_URL}/tmdb-proxy?${queryParams.toString()}`;
+            console.log('Sending request to Worker for movies:', requestUrl);
+
+            try {
+                const response = await fetch(requestUrl);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from worker.' }));
+                    throw new Error(`Worker error (movies): ${errorData.message || response.statusText}. Status: ${response.status}`);
+                }
+                const data = await response.json();
+                console.log('Movies data received from Worker:', data);
+                return data.data.results;
+            } catch (error) {
+                console.error("Error fetching movies via Worker:", error);
+                throw error; // Re-throw to be caught by loadMoreMovies
             }
-            const data = await response.json();
-            return data.data.results;
         }
 
         /**
@@ -196,6 +226,7 @@
          * @param {boolean} clearExisting - Whether to clear existing movies before displaying.
          */
         function displayMovies(movies, clearExisting = false) {
+            console.log(`Displaying ${movies.length} movies. Clearing existing: ${clearExisting}`);
             if (clearExisting) {
                 movieList.innerHTML = '';
             }
@@ -236,17 +267,24 @@
          * @param {boolean} clearExisting - True if existing movies should be cleared (e.g., on button click or genre change).
          */
         async function loadMoreMovies(clearExisting = false) {
-            if (isLoading) return;
+            console.log(`loadMoreMovies called. clearExisting: ${clearExisting}, currentGenreId: ${currentGenreId}, currentPage: ${currentPage}`);
+            if (isLoading) {
+                console.log('Already loading, returning early.');
+                return;
+            }
             isLoading = true;
             hideError();
 
             if (clearExisting) {
+                console.log('Clearing existing movies and setting new random page.');
                 loadingIndicator.classList.remove('opacity-0');
                 loadingIndicator.classList.add('opacity-100');
                 loadingMoreIndicator.classList.remove('opacity-100');
                 loadingMoreIndicator.classList.add('opacity-0');
                 currentPage = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1; // Set a random page for initial load/button click
+                console.log('New starting page set to:', currentPage);
             } else {
+                console.log('Loading more movies for infinite scroll.');
                 loadingMoreIndicator.classList.remove('opacity-0');
                 loadingMoreIndicator.classList.add('opacity-100');
                 loadingIndicator.classList.remove('opacity-100');
@@ -258,9 +296,10 @@
                 const cacheBuster = clearExisting ? Date.now() : null;
                 const movies = await fetchMovies(currentGenreId, currentPage, cacheBuster);
                 displayMovies(movies, clearExisting);
-                currentPage++;
+                currentPage++; // Increment page for next infinite scroll fetch
+                console.log('Movies loaded successfully. Next page for infinite scroll:', currentPage);
             } catch (error) {
-                console.error("Error loading movies:", error);
+                console.error("Error loading movies in loadMoreMovies:", error);
                 displayError("Failed to fetch movies. Please try again later. Error: " + error.message);
             } finally {
                 isLoading = false;
@@ -268,27 +307,44 @@
                 loadingIndicator.classList.add('opacity-0');
                 loadingMoreIndicator.classList.remove('opacity-100');
                 loadingMoreIndicator.classList.add('opacity-0');
+                console.log('Loading complete.');
             }
         }
 
         // Initialize the app
         document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM Content Loaded. Initializing FilmFinder...');
             versionNumberSpan.textContent = CURRENT_VERSION; // Set the initial version number
 
+            // --- CRITICAL: Initial check for WORKER_BASE_URL before fetching ---
+            if (!WORKER_BASE_URL || !WORKER_BASE_URL.startsWith('https://')) {
+                console.error('CRITICAL ERROR: WORKER_BASE_URL is missing or invalid. Please set it correctly.');
+                displayError('CRITICAL ERROR: Worker URL is not configured. Please check your Cloudflare Worker deployment and set WORKER_BASE_URL correctly in index.html.');
+                return; // Stop execution if URL is invalid
+            }
+
+
             fetchGenres().then(() => {
+                console.log('Genres fetched and dropdown populated.');
                 currentGenreId = genreSelect.value;
                 observer.observe(loadingMoreIndicator);
-                loadMoreMovies(true);
+                loadMoreMovies(true); // Initial load
+            }).catch(error => {
+                console.error('Error during initial genre fetch and movie load:', error);
             });
 
+            // Event listener for genre change
             genreSelect.addEventListener('change', () => {
+                console.log('Genre changed to:', genreSelect.value);
                 currentGenreId = genreSelect.value;
-                loadMoreMovies(true);
+                loadMoreMovies(true); // Load new movies for the selected genre, clearing existing ones
             });
 
+            // Event listener for the generate button
             generateBtn.addEventListener('click', () => {
-                currentGenreId = genreSelect.value;
-                loadMoreMovies(true);
+                console.log('Generate Movies button clicked.');
+                currentGenreId = genreSelect.value; // Ensure genre is correct
+                loadMoreMovies(true); // Generate new movies, clearing existing ones
             });
         });
     </script>
