@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Movie Discovery</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Custom CSS for font and general styling */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #1a202c; /* Dark background */
+            color: #e2e8f0; /* Light text */
+        }
+        /* Style for scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #2d3748;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #4a5568;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280;
+        }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+    <div class="container mx-auto bg-gray-800 p-6 rounded-lg shadow-xl">
+        <h1 class="text-4xl font-bold text-center mb-6 text-indigo-400">Movie Discovery</h1>
+
+        <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
+            <label for="genreSelect" class="text-lg font-medium">Select Genre:</label>
+            <select id="genreSelect" class="p-3 bg-gray-700 border border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 text-white">
+                <!-- Genres will be loaded here by JavaScript -->
+            </select>
+            <button id="generateBtn" class="px-6 py-3 bg-indigo-600 text-white font-semibold rounded-md shadow-lg hover:bg-indigo-700 transition duration-300 ease-in-out transform hover:scale-105">
+                Generate Movies
+            </button>
+        </div>
+
+        <div id="loadingIndicator" class="hidden text-center text-indigo-400 text-xl py-8">
+            <svg class="animate-spin h-8 w-8 text-indigo-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2">Loading movies...</p>
+        </div>
+
+        <div id="movieList" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+            <!-- Movie cards will be displayed here -->
+        </div>
+
+        <div id="loadingMoreIndicator" class="hidden text-center text-indigo-400 text-xl py-8">
+            <svg class="animate-spin h-8 w-8 text-indigo-400 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            <p class="mt-2">Loading more movies...</p>
+        </div>
+
+        <div id="errorMessage" class="hidden text-center text-red-400 mt-8 text-lg">
+            An error occurred. Please try again later.
+        </div>
+    </div>
+
+    <script>
+        // TMDB API Key from the user request
+        const TMDB_API_KEY = '51a556b5b4c486c81a350554e4de3309';
+        const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+        const IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500';
+
+        const genreSelect = document.getElementById('genreSelect');
+        const generateBtn = document.getElementById('generateBtn');
+        const movieList = document.getElementById('movieList');
+        const loadingIndicator = document.getElementById('loadingIndicator'); // For initial/button load
+        const loadingMoreIndicator = document.getElementById('loadingMoreIndicator'); // For infinite scroll
+        const errorMessage = document.getElementById('errorMessage');
+
+        /**
+         * Hides any error messages.
+         */
+        function hideError() {
+            errorMessage.classList.add('hidden');
+        }
+
+        /**
+         * Displays an error message.
+         * @param {string} message - The error message to display.
+         */
+        function displayError(message) {
+            errorMessage.textContent = message;
+            errorMessage.classList.remove('hidden');
+        }
+
+        let genres = []; // To store fetched genres
+        let currentPage = 1; // Current page for fetching movies during infinite scroll
+        let isLoading = false; // Flag to prevent multiple concurrent fetch requests
+        let currentGenreId = 'all'; // Currently selected genre ID
+        const MAX_TMDB_PAGES = 500; // TMDB API typically has many pages, limiting to 500 for variety
+
+        // Intersection Observer for infinite scrolling
+        const observer = new IntersectionObserver((entries) => {
+            if (entries[0].isIntersecting && !isLoading) {
+                // If the loadingMoreIndicator is visible and not already loading, fetch more movies
+                loadMoreMovies(false); // Load more, do not clear existing
+            }
+        }, {
+            root: null, // relative to the viewport
+            rootMargin: '200px', // start loading when 200px from bottom
+            threshold: 0.1 // 10% of the target is visible
+        });
+
+        /**
+         * Fetches movie genres from TMDB API and populates the genre dropdown.
+         */
+        async function fetchGenres() {
+            try {
+                const response = await fetch(`${TMDB_BASE_URL}/genre/movie/list?api_key=${TMDB_API_KEY}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                genres = data.genres;
+
+                // Add "All Movies" option at the top
+                const allOption = document.createElement('option');
+                allOption.value = 'all';
+                allOption.textContent = 'All Movies';
+                genreSelect.appendChild(allOption);
+
+                // Add fetched genres to the dropdown
+                genres.forEach(genre => {
+                    const option = document.createElement('option');
+                    option.value = genre.id;
+                    option.textContent = genre.name;
+                    genreSelect.appendChild(option);
+                });
+            } catch (error) {
+                console.error("Error fetching genres:", error);
+                displayError("Failed to load genres. Please check your API key or network connection.");
+            }
+        }
+
+        /**
+         * Fetches movies based on the selected genre and page number.
+         * For initial load and 'Generate Movies' button, a random page is used.
+         * For infinite scrolling, the currentPage variable is used.
+         * @param {string} genreId - The ID of the selected genre, or 'all' for all genres.
+         * @param {number} page - The page number to fetch. If not provided (or for initial/button click), a random page is selected.
+         * @returns {Promise<Array>} - A promise that resolves with an array of movie data.
+         */
+        async function fetchMovies(genreId, page = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1) {
+            let url = `${TMDB_BASE_URL}/discover/movie?api_key=${TMDB_API_KEY}&language=en-US&sort_by=popularity.desc&include_adult=false&include_video=false&page=${page}`;
+
+            if (genreId !== 'all') {
+                url += `&with_genres=${genreId}`;
+            }
+
+            const response = await fetch(url);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            return data.results;
+        }
+
+        /**
+         * Appends movie posters and information to the movie list container.
+         * @param {Array} movies - An array of movie objects.
+         * @param {boolean} clearExisting - Whether to clear existing movies before displaying.
+         */
+        function displayMovies(movies, clearExisting = false) {
+            if (clearExisting) {
+                movieList.innerHTML = ''; // Clear previous movies for new generation
+            }
+
+            if (movies.length === 0 && clearExisting) {
+                movieList.innerHTML = '<p class="text-center text-gray-400 col-span-full">No movies found for this genre. Try another genre or click Generate again!</p>';
+                return;
+            }
+
+            movies.forEach(movie => {
+                const movieCard = document.createElement('div');
+                movieCard.className = 'bg-gray-700 rounded-lg shadow-md overflow-hidden transform transition duration-300 ease-in-out hover:scale-105';
+
+                const posterPath = movie.poster_path ? `${IMAGE_BASE_URL}${movie.poster_path}` : 'https://placehold.co/500x750/374151/d1d5db?text=No+Poster';
+                const releaseDate = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A';
+
+                // Get genre names for the movie
+                const movieGenreNames = movie.genre_ids.map(genreId => {
+                    const foundGenre = genres.find(g => g.id === genreId);
+                    return foundGenre ? foundGenre.name : '';
+                }).filter(name => name !== '').join(', ');
+
+
+                movieCard.innerHTML = `
+                    <img src="${posterPath}" alt="${movie.title || 'Untitled'}" class="w-full h-auto object-cover rounded-t-lg" onerror="this.onerror=null;this.src='https://placehold.co/500x750/374151/d1d5db?text=No+Poster';">
+                    <div class="p-4">
+                        <h3 class="text-xl font-semibold text-white mb-2">${movie.title || 'Untitled'}</h3>
+                        <p class="text-gray-300 text-sm mb-1">Release Year: ${releaseDate}</p>
+                        <p class="text-gray-300 text-sm mb-1">Rating: ${movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'}</p>
+                        <p class="text-gray-300 text-sm">Genres: ${movieGenreNames || 'N/A'}</p>
+                    </div>
+                `;
+                movieList.appendChild(movieCard);
+            });
+        }
+
+        /**
+         * Loads movies, either by appending (infinite scroll) or by clearing and fetching new ones (button/genre change).
+         * @param {boolean} clearExisting - True if existing movies should be cleared (e.g., on button click or genre change).
+         */
+        async function loadMoreMovies(clearExisting = false) {
+            if (isLoading) return; // Prevent multiple calls
+            isLoading = true;
+            hideError();
+
+            if (clearExisting) {
+                loadingIndicator.classList.remove('hidden'); // Show main loading indicator for initial/button load
+                loadingMoreIndicator.classList.add('hidden'); // Hide infinite scroll indicator
+                currentPage = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1; // Set a random page for initial load/button click
+            } else {
+                loadingMoreIndicator.classList.remove('hidden'); // Show infinite scroll indicator
+                loadingIndicator.classList.add('hidden'); // Hide main loading indicator
+            }
+
+            try {
+                const movies = await fetchMovies(currentGenreId, currentPage); // Pass currentPage to fetchMovies
+                displayMovies(movies, clearExisting);
+                currentPage++; // Increment page for next infinite scroll fetch
+            } catch (error) {
+                console.error("Error loading movies:", error);
+                displayError("Failed to fetch movies. Please try again later.");
+            } finally {
+                isLoading = false;
+                loadingIndicator.classList.add('hidden');
+                loadingMoreIndicator.classList.add('hidden');
+            }
+        }
+
+        // Initialize the app
+        document.addEventListener('DOMContentLoaded', () => {
+            fetchGenres().then(() => {
+                // Set initial genre
+                currentGenreId = genreSelect.value;
+                // Observe the loadingMoreIndicator for infinite scrolling
+                observer.observe(loadingMoreIndicator);
+                // Load initial set of movies with a random starting page
+                loadMoreMovies(true);
+            });
+
+            // Event listener for genre change
+            genreSelect.addEventListener('change', () => {
+                currentGenreId = genreSelect.value; // Update current genre
+                loadMoreMovies(true); // Load new movies for the selected genre, clearing existing ones and starting from a random page
+            });
+
+            // Event listener for the generate button
+            generateBtn.addEventListener('click', () => {
+                currentGenreId = genreSelect.value; // Ensure genre is correct
+                loadMoreMovies(true); // Generate new movies, clearing existing ones and starting from a random page
+            });
+        });
+    </script>
+</body>
+</html>
