@@ -82,10 +82,9 @@
 
     <script>
         // CRITICAL: Ensure this WORKER_BASE_URL is exactly correct for your deployed Cloudflare Worker.
-        // You can find this URL in your Cloudflare dashboard under your Worker's overview page.
         // It's typically in the format: https://<worker-name>.<your-subdomain>.workers.dev
-        const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev'; // <<<--- VERIFY THIS URL
-        const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+        const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev';
+        // TMDB_BASE_URL and TMDB_API_KEY are NOT needed here as the Worker will handle them.
         const IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 
         const genreSelect = document.getElementById('genreSelect');
@@ -96,9 +95,7 @@
         const errorMessage = document.getElementById('errorMessage');
         const versionNumberSpan = document.getElementById('versionNumber'); // Reference to the version span
 
-        const CURRENT_VERSION = "v1.0.5"; // Updated version of the FilmFinder frontend
-
-        let TMDB_API_KEY = null; // This will now be fetched from the Worker
+        const CURRENT_VERSION = "v1.0.7"; // Updated version of the FilmFinder frontend
 
         /**
          * Hides any error messages.
@@ -135,53 +132,28 @@
         });
 
         /**
-         * Fetches the TMDB API key from the Cloudflare Worker.
-         */
-        async function getTmdbApiKey() {
-            console.log('Attempting to fetch TMDB API Key from Worker...');
-            try {
-                const response = await fetch(`${WORKER_BASE_URL}/get-tmdb-key`);
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from worker.' }));
-                    throw new Error(`Worker error (get TMDB key): ${errorData.message || response.statusText}. Status: ${response.status}`);
-                }
-                const data = await response.json();
-                if (data.success && data.tmdb_api_key) {
-                    TMDB_API_KEY = data.tmdb_api_key;
-                    console.log('TMDB API Key fetched successfully.');
-                    return true;
-                } else {
-                    throw new Error(data.message || 'Failed to retrieve TMDB API key from worker.');
-                }
-            } catch (error) {
-                console.error("Error fetching TMDB API Key:", error);
-                displayError(`Failed to get TMDB API key. Error: ${error.message}`);
-                return false;
-            }
-        }
-
-        /**
-         * Fetches movie genres directly from TMDB API using the fetched API key.
+         * Fetches movie genres from TMDB API via the Cloudflare Worker proxy.
          */
         async function fetchGenres() {
-            console.log('Fetching genres directly from TMDB...');
-            if (!TMDB_API_KEY) {
-                displayError("TMDB API Key is not available. Cannot fetch genres.");
-                console.error("TMDB_API_KEY is null. getTmdbApiKey() must be called first.");
+            console.log('Fetching genres from Worker proxy...');
+            if (!WORKER_BASE_URL || !WORKER_BASE_URL.startsWith('https://')) {
+                console.error('WORKER_BASE_URL is not set or invalid. Cannot fetch genres.');
+                displayError("Worker URL is not configured or invalid. Please check console.");
                 return;
             }
             try {
-                const requestUrl = `${TMDB_BASE_URL}/genre/movie/list?api_key=${TMDB_API_KEY}`;
-                console.log('Fetching genres from TMDB URL:', requestUrl); // WARNING: API key is now visible here in network tab
+                // Call the Worker's TMDB proxy endpoint for genres
+                const requestUrl = `${WORKER_BASE_URL}/tmdb-proxy?endpoint=genre/movie/list`;
+                console.log('Fetching genres from Worker URL:', requestUrl);
                 const response = await fetch(requestUrl);
 
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from TMDB.' }));
-                    throw new Error(`TMDB API error (genres): ${errorData.status_message || response.statusText}. Status: ${response.status}`);
+                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from worker.' }));
+                    throw new Error(`Worker error (genres): ${errorData.message || response.statusText}. Status: ${response.status}`);
                 }
-                const data = await response.json(); // Direct TMDB response structure
-                genres = data.genres; // Direct TMDB response structure
-                console.log('Genres fetched successfully:', genres);
+                const data = await response.json(); // This is the Worker's response
+                genres = data.data.genres; // Extract actual genre data from the Worker's 'data' field
+                console.log('Genres fetched successfully via Worker:', genres);
 
                 const allOption = document.createElement('option');
                 allOption.value = 'all';
@@ -201,43 +173,50 @@
         }
 
         /**
-         * Fetches movies based on the selected genre and page number directly from TMDB API.
+         * Fetches movies based on the selected genre and page number via the Cloudflare Worker proxy.
          * @param {string} genreId - The ID of the selected genre, or 'all' for all genres.
          * @param {number} page - The page number to fetch.
          * @param {number|null} cacheBuster - An optional timestamp to bust browser/proxy cache for the API call.
          * @returns {Promise<Array>} - A promise that resolves with an array of movie data.
          */
         async function fetchMovies(genreId, page, cacheBuster = null) {
-            console.log(`Fetching movies for genreId: ${genreId}, page: ${page}, cacheBuster: ${cacheBuster}`);
-            if (!TMDB_API_KEY) {
-                displayError("TMDB API Key is not available. Cannot fetch movies.");
-                console.error("TMDB_API_KEY is null. getTmdbApiKey() must be called first.");
+            console.log(`Fetching movies for genreId: ${genreId}, page: ${page}, cacheBuster: ${cacheBuster} via Worker proxy.`);
+            if (!WORKER_BASE_URL || !WORKER_BASE_URL.startsWith('https://')) {
+                console.error('WORKER_BASE_URL is not set or invalid. Cannot fetch movies.');
+                displayError("Worker URL is not configured or invalid. Please check console.");
                 return [];
             }
 
-            let requestUrl = `${TMDB_BASE_URL}/discover/movie?api_key=${TMDB_API_KEY}&language=en-US&sort_by=popularity.desc&include_adult=false&include_video=false&page=${page}`;
+            const queryParams = new URLSearchParams();
+            queryParams.append('endpoint', 'discover/movie');
+            queryParams.append('language', 'en-US');
+            queryParams.append('sort_by', 'popularity.desc');
+            queryParams.append('include_adult', 'false');
+            queryParams.append('include_video', 'false');
+            queryParams.append('page', page);
 
             if (genreId !== 'all') {
-                requestUrl += `&with_genres=${genreId}`;
+                queryParams.append('with_genres', genreId);
             }
             if (cacheBuster) {
-                requestUrl += `&cache_buster=${cacheBuster}`; // Add cache buster if provided
+                queryParams.append('cache_buster', cacheBuster); // Add cache buster if provided
                 console.log('Adding cache buster to URL:', cacheBuster);
             }
 
-            console.log('Sending request directly to TMDB:', requestUrl); // WARNING: API key is now visible here in network tab
+            const requestUrl = `${WORKER_BASE_URL}/tmdb-proxy?${queryParams.toString()}`;
+            console.log('Sending request to Worker for movies:', requestUrl);
 
             try {
                 const response = await fetch(requestUrl);
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from TMDB.' }));
-                    throw new Error(`TMDB API error (movies): ${errorData.status_message || response.statusText}. Status: ${response.status}`);
+                    const errorData = await response.json().catch(() => ({ message: 'Unknown error, non-JSON response from worker.' }));
+                    throw new Error(`Worker error (movies): ${errorData.message || response.statusText}. Status: ${response.status}`);
                 }
-                const data = await response.json(); // Direct TMDB response structure
-                console.log('Movies data received directly from TMDB:', data);
-                return data.results;
+                const data = await response.json(); // This is the Worker's response
+                console.log('Movies data received from Worker:', data);
+                return data.data.results; // Extract actual movie data from the Worker's 'data' field
             } catch (error) {
-                console.error("Error fetching movies directly from TMDB:", error);
+                console.error("Error fetching movies via Worker:", error);
                 throw error; // Re-throw to be caught by loadMoreMovies
             }
         }
@@ -276,7 +255,7 @@
                     <div class="p-4">
                         <h3 class="text-xl font-semibold text-white mb-2">${movie.title || 'Untitled'}</h3>
                         <p class="text-gray-300 text-sm mb-1">Release Year: ${releaseDate}</p>
-                        <p class="text-gray-300 text-sm mb-1">Rating: ${movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'}</p>
+                        <p class="text-300 text-sm mb-1">Rating: ${movie.vote_average ? movie.vote_average.toFixed(1) : 'N/A'}</p>
                         <p class="text-gray-300 text-sm">Genres: ${movieGenreNames || 'N/A'}</p>
                     </div>
                 `;
@@ -345,12 +324,13 @@
                 return; // Stop execution if URL is invalid
             }
 
-            // --- NEW: Fetch API Key before proceeding ---
-            const apiKeySuccess = await getTmdbApiKey();
-            if (!apiKeySuccess) {
-                console.error('Failed to initialize: Could not get TMDB API Key. Stopping initialization.');
-                return; // Stop if API key cannot be fetched
-            }
+            // The getTmdbApiKey function and related variable are no longer needed here
+            // as the worker is now acting as a proxy.
+            // const apiKeySuccess = await getTmdbApiKey();
+            // if (!apiKeySuccess) {
+            //     console.error('Failed to initialize: Could not get TMDB API Key. Stopping initialization.');
+            //     return;
+            // }
 
             fetchGenres().then(() => {
                 console.log('Genres fetched and dropdown populated.');
