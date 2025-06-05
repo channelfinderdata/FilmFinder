@@ -37,7 +37,11 @@
 </head>
 <body class="p-4 sm:p-8">
     <div class="container mx-auto bg-gray-800 p-6 rounded-lg shadow-xl">
-        <h1 class="text-4xl font-bold text-center mb-6 text-indigo-400">FilmFinder</h1>
+        <h1 class="text-4xl font-bold text-center mb-6 text-indigo-400 relative">
+            FilmFinder
+            <!-- Version Number -->
+            <span id="versionNumber" class="absolute top-0 right-0 text-sm text-gray-400 mt-2 mr-2"></span>
+        </h1>
 
         <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
             <label for="genreSelect" class="text-lg font-medium">Select Genre:</label>
@@ -77,8 +81,6 @@
     </div>
 
     <script>
-        // Removed TMDB_API_KEY from here, it's now a secret in your Cloudflare Worker.
-        // TMDB_BASE_URL is also no longer needed directly.
         const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev'; // Your Cloudflare Worker's URL
         const IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 
@@ -88,6 +90,9 @@
         const loadingIndicator = document.getElementById('loadingIndicator'); // For initial/button load
         const loadingMoreIndicator = document.getElementById('loadingMoreIndicator'); // For infinite scroll
         const errorMessage = document.getElementById('errorMessage');
+        const versionNumberSpan = document.getElementById('versionNumber'); // Reference to the version span
+
+        const CURRENT_VERSION = "v1.0.1"; // Current version of the FilmFinder frontend
 
         /**
          * Hides any error messages.
@@ -128,24 +133,19 @@
          */
         async function fetchGenres() {
             try {
-                // Call the Worker's TMDB proxy endpoint with the genre list endpoint
                 const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?endpoint=genre/movie/list`);
                 if (!response.ok) {
-                    // If the Worker returns an error status (e.g., 500), throw an error.
-                    // The Worker is expected to return a JSON object with 'success' and 'message' fields.
                     const errorData = await response.json();
                     throw new Error(`Worker error: ${errorData.message || response.statusText}`);
                 }
-                const data = await response.json(); // This is the Worker's response
-                genres = data.data.genres; // Extract actual genre data from the Worker's 'data' field
+                const data = await response.json();
+                genres = data.data.genres;
 
-                // Add "All Movies" option at the top
                 const allOption = document.createElement('option');
                 allOption.value = 'all';
                 allOption.textContent = 'All Movies';
                 genreSelect.appendChild(allOption);
 
-                // Add fetched genres to the dropdown
                 genres.forEach(genre => {
                     const option = document.createElement('option');
                     option.value = genre.id;
@@ -160,14 +160,12 @@
 
         /**
          * Fetches movies based on the selected genre and page number via the Cloudflare Worker proxy.
-         * For initial load and 'Generate Movies' button, a random page is used.
-         * For infinite scrolling, the currentPage variable is used.
          * @param {string} genreId - The ID of the selected genre, or 'all' for all genres.
-         * @param {number} page - The page number to fetch. If not provided (or for initial/button click), a random page is selected.
+         * @param {number} page - The page number to fetch.
+         * @param {number|null} cacheBuster - An optional timestamp to bust browser/proxy cache for the API call.
          * @returns {Promise<Array>} - A promise that resolves with an array of movie data.
          */
-        async function fetchMovies(genreId, page = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1) {
-            // Build query parameters for the Worker's TMDB proxy endpoint
+        async function fetchMovies(genreId, page, cacheBuster = null) {
             const queryParams = new URLSearchParams();
             queryParams.append('endpoint', 'discover/movie');
             queryParams.append('language', 'en-US');
@@ -179,16 +177,17 @@
             if (genreId !== 'all') {
                 queryParams.append('with_genres', genreId);
             }
+            if (cacheBuster) {
+                queryParams.append('cache_buster', cacheBuster); // Add cache buster if provided
+            }
 
-            // Call the Worker's TMDB proxy endpoint with the constructed parameters
             const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?${queryParams.toString()}`);
             if (!response.ok) {
-                // If the Worker returns an error status, parse its JSON response for the error message
                 const errorData = await response.json();
                 throw new Error(`Worker error: ${errorData.message || response.statusText}`);
             }
-            const data = await response.json(); // This is the Worker's response
-            return data.data.results; // Extract actual movie data from the Worker's 'data' field
+            const data = await response.json();
+            return data.data.results;
         }
 
         /**
@@ -198,7 +197,7 @@
          */
         function displayMovies(movies, clearExisting = false) {
             if (clearExisting) {
-                movieList.innerHTML = ''; // Clear previous movies for new generation
+                movieList.innerHTML = '';
             }
 
             if (movies.length === 0 && clearExisting) {
@@ -213,7 +212,6 @@
                 const posterPath = movie.poster_path ? `${IMAGE_BASE_URL}${movie.poster_path}` : 'https://placehold.co/500x750/374151/d1d5db?text=No+Poster';
                 const releaseDate = movie.release_date ? new Date(movie.release_date).getFullYear() : 'N/A';
 
-                // Get genre names for the movie
                 const movieGenreNames = movie.genre_ids.map(genreId => {
                     const foundGenre = genres.find(g => g.id === genreId);
                     return foundGenre ? foundGenre.name : '';
@@ -238,60 +236,59 @@
          * @param {boolean} clearExisting - True if existing movies should be cleared (e.g., on button click or genre change).
          */
         async function loadMoreMovies(clearExisting = false) {
-            if (isLoading) return; // Prevent multiple calls
+            if (isLoading) return;
             isLoading = true;
             hideError();
 
             if (clearExisting) {
-                loadingIndicator.classList.remove('opacity-0'); // Show main loading indicator
+                loadingIndicator.classList.remove('opacity-0');
                 loadingIndicator.classList.add('opacity-100');
-                loadingMoreIndicator.classList.remove('opacity-100'); // Hide infinite scroll indicator
+                loadingMoreIndicator.classList.remove('opacity-100');
                 loadingMoreIndicator.classList.add('opacity-0');
                 currentPage = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1; // Set a random page for initial load/button click
             } else {
-                loadingMoreIndicator.classList.remove('opacity-0'); // Show infinite scroll indicator
+                loadingMoreIndicator.classList.remove('opacity-0');
                 loadingMoreIndicator.classList.add('opacity-100');
-                loadingIndicator.classList.remove('opacity-100'); // Hide main loading indicator
+                loadingIndicator.classList.remove('opacity-100');
                 loadingIndicator.classList.add('opacity-0');
             }
 
             try {
-                const movies = await fetchMovies(currentGenreId, currentPage); // Pass currentPage to fetchMovies
+                // Pass cacheBuster for initial load and generate button click
+                const cacheBuster = clearExisting ? Date.now() : null;
+                const movies = await fetchMovies(currentGenreId, currentPage, cacheBuster);
                 displayMovies(movies, clearExisting);
-                currentPage++; // Increment page for next infinite scroll fetch
+                currentPage++;
             } catch (error) {
                 console.error("Error loading movies:", error);
                 displayError("Failed to fetch movies. Please try again later. Error: " + error.message);
             } finally {
                 isLoading = false;
-                loadingIndicator.classList.remove('opacity-100'); // Hide main loading indicator
+                loadingIndicator.classList.remove('opacity-100');
                 loadingIndicator.classList.add('opacity-0');
-                loadingMoreIndicator.classList.remove('opacity-100'); // Hide infinite scroll indicator
+                loadingMoreIndicator.classList.remove('opacity-100');
                 loadingMoreIndicator.classList.add('opacity-0');
             }
         }
 
         // Initialize the app
         document.addEventListener('DOMContentLoaded', () => {
+            versionNumberSpan.textContent = CURRENT_VERSION; // Set the initial version number
+
             fetchGenres().then(() => {
-                // Set initial genre
                 currentGenreId = genreSelect.value;
-                // Observe the loadingMoreIndicator for infinite scrolling
                 observer.observe(loadingMoreIndicator);
-                // Load initial set of movies with a random starting page
                 loadMoreMovies(true);
             });
 
-            // Event listener for genre change
             genreSelect.addEventListener('change', () => {
-                currentGenreId = genreSelect.value; // Update current genre
-                loadMoreMovies(true); // Load new movies for the selected genre, clearing existing ones and starting from a random page
+                currentGenreId = genreSelect.value;
+                loadMoreMovies(true);
             });
 
-            // Event listener for the generate button
             generateBtn.addEventListener('click', () => {
-                currentGenreId = genreSelect.value; // Ensure genre is correct
-                loadMoreMovies(true); // Generate new movies, clearing existing ones and starting from a random page
+                currentGenreId = genreSelect.value;
+                loadMoreMovies(true);
             });
         });
     </script>
