@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Movie Discovery</title>
+    <title>FilmFinder</title>
+    <!-- Favicon - Cute little film strip icon -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366F1'%3E%3Cpath d='M18 3v2h-2V3H8v2H6V3H4v18h2v-2h2v2h8v-2h2v2h2V3h-2zm-2 16H8V5h8v14z'/%3E%3Cpath d='M10 7h4v2h-4zm0 4h4v2h-4zm0 4h4v2h-4z'/%3E%3C/svg%3E" type="image/svg+xml">
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
@@ -35,7 +37,7 @@
 </head>
 <body class="p-4 sm:p-8">
     <div class="container mx-auto bg-gray-800 p-6 rounded-lg shadow-xl">
-        <h1 class="text-4xl font-bold text-center mb-6 text-indigo-400">Movie Discovery</h1>
+        <h1 class="text-4xl font-bold text-center mb-6 text-indigo-400">FilmFinder</h1>
 
         <div class="flex flex-col sm:flex-row items-center justify-center space-y-4 sm:space-y-0 sm:space-x-4 mb-8">
             <label for="genreSelect" class="text-lg font-medium">Select Genre:</label>
@@ -75,9 +77,9 @@
     </div>
 
     <script>
-        // TMDB API Key from the user request
-        const TMDB_API_KEY = '51a556b5b4c486c81a350554e4de3309';
-        const TMDB_BASE_URL = 'https://api.themoviedb.org/3';
+        // Removed TMDB_API_KEY from here, it's now a secret in your Cloudflare Worker.
+        // TMDB_BASE_URL is also no longer needed directly.
+        const WORKER_BASE_URL = 'https://verify-master-code-worker.authme.workers.dev'; // Your Cloudflare Worker's URL
         const IMAGE_BASE_URL = 'https://image.tmdb.org/t/p/w500';
 
         const genreSelect = document.getElementById('genreSelect');
@@ -122,16 +124,20 @@
         });
 
         /**
-         * Fetches movie genres from TMDB API and populates the genre dropdown.
+         * Fetches movie genres from TMDB API via the Cloudflare Worker proxy.
          */
         async function fetchGenres() {
             try {
-                const response = await fetch(`${TMDB_BASE_URL}/genre/movie/list?api_key=${TMDB_API_KEY}`);
+                // Call the Worker's TMDB proxy endpoint with the genre list endpoint
+                const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?endpoint=genre/movie/list`);
                 if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
+                    // If the Worker returns an error status (e.g., 500), throw an error.
+                    // The Worker is expected to return a JSON object with 'success' and 'message' fields.
+                    const errorData = await response.json();
+                    throw new Error(`Worker error: ${errorData.message || response.statusText}`);
                 }
-                const data = await response.json();
-                genres = data.genres;
+                const data = await response.json(); // This is the Worker's response
+                genres = data.data.genres; // Extract actual genre data from the Worker's 'data' field
 
                 // Add "All Movies" option at the top
                 const allOption = document.createElement('option');
@@ -148,12 +154,12 @@
                 });
             } catch (error) {
                 console.error("Error fetching genres:", error);
-                displayError("Failed to load genres. Please check your API key or network connection.");
+                displayError("Failed to load genres. Please check your API key setup or network connection.");
             }
         }
 
         /**
-         * Fetches movies based on the selected genre and page number.
+         * Fetches movies based on the selected genre and page number via the Cloudflare Worker proxy.
          * For initial load and 'Generate Movies' button, a random page is used.
          * For infinite scrolling, the currentPage variable is used.
          * @param {string} genreId - The ID of the selected genre, or 'all' for all genres.
@@ -161,18 +167,28 @@
          * @returns {Promise<Array>} - A promise that resolves with an array of movie data.
          */
         async function fetchMovies(genreId, page = Math.floor(Math.random() * MAX_TMDB_PAGES) + 1) {
-            let url = `${TMDB_BASE_URL}/discover/movie?api_key=${TMDB_API_KEY}&language=en-US&sort_by=popularity.desc&include_adult=false&include_video=false&page=${page}`;
+            // Build query parameters for the Worker's TMDB proxy endpoint
+            const queryParams = new URLSearchParams();
+            queryParams.append('endpoint', 'discover/movie');
+            queryParams.append('language', 'en-US');
+            queryParams.append('sort_by', 'popularity.desc');
+            queryParams.append('include_adult', 'false');
+            queryParams.append('include_video', 'false');
+            queryParams.append('page', page);
 
             if (genreId !== 'all') {
-                url += `&with_genres=${genreId}`;
+                queryParams.append('with_genres', genreId);
             }
 
-            const response = await fetch(url);
+            // Call the Worker's TMDB proxy endpoint with the constructed parameters
+            const response = await fetch(`${WORKER_BASE_URL}/tmdb-proxy?${queryParams.toString()}`);
             if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
+                // If the Worker returns an error status, parse its JSON response for the error message
+                const errorData = await response.json();
+                throw new Error(`Worker error: ${errorData.message || response.statusText}`);
             }
-            const data = await response.json();
-            return data.results;
+            const data = await response.json(); // This is the Worker's response
+            return data.data.results; // Extract actual movie data from the Worker's 'data' field
         }
 
         /**
@@ -245,7 +261,7 @@
                 currentPage++; // Increment page for next infinite scroll fetch
             } catch (error) {
                 console.error("Error loading movies:", error);
-                displayError("Failed to fetch movies. Please try again later.");
+                displayError("Failed to fetch movies. Please try again later. Error: " + error.message);
             } finally {
                 isLoading = false;
                 loadingIndicator.classList.remove('opacity-100'); // Hide main loading indicator
